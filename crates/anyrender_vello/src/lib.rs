@@ -16,5 +16,7 @@ use std::num::NonZeroUsize;
 
 #[cfg(target_os = "macos")]
 const DEFAULT_THREADS: Option<NonZeroUsize> = NonZeroUsize::new(1);
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+const DEFAULT_THREADS: Option<NonZeroUsize> = NonZeroUsize::new(1);
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 const DEFAULT_THREADS: Option<NonZeroUsize> = None;

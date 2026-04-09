@@ -1,4 +1,5 @@
 use crate::{DeviceHandle, block_on_wgpu, util::create_texture};
+use std::time::Duration;
 use wgpu::{
     BufferDescriptor, BufferUsages, CommandEncoderDescriptor, Device, Extent3d, Queue,
     TexelCopyBufferInfo, TexelCopyBufferLayout, TextureFormat, TextureUsages, TextureView,
@@ -132,6 +133,15 @@ impl BufferRenderer {
             });
         let row_byte_width = self.config.width as usize * 4;
         let padded_row_byte_width = row_byte_width.next_multiple_of(256);
+        let expected_len = row_byte_width.saturating_mul(self.config.height as usize);
+        if cpu_buffer.len() < expected_len {
+            eprintln!(
+                "[wgpu_context][buffer_renderer] copy_texture_to_buffer:cpu_buffer_too_small {} < {}",
+                cpu_buffer.len(),
+                expected_len
+            );
+            return;
+        }
 
         let texture = self.texture_view.texture();
         encoder.copy_texture_to_buffer(
@@ -141,24 +151,47 @@ impl BufferRenderer {
                 layout: TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(padded_row_byte_width as u32),
-                    rows_per_image: None,
+                    rows_per_image: Some(self.config.height),
                 },
             },
             texture.size(),
         );
 
-        self.queue().submit([encoder.finish()]);
+        let submission_index = self.queue().submit([encoder.finish()]);
+        if let Err(err) = self.device().poll(wgpu::PollType::Wait {
+            submission_index: Some(submission_index),
+            timeout: Some(Duration::from_secs(5)),
+        }) {
+            eprintln!("[wgpu_context][buffer_renderer] copy_texture_to_buffer:poll_err {err}");
+            return;
+        }
         let buf_slice = self.gpu_buffer.slice(..);
 
         let (sender, receiver) = futures_intrusive::channel::shared::oneshot_channel();
-        buf_slice.map_async(wgpu::MapMode::Read, move |v| sender.send(v).unwrap());
+        buf_slice.map_async(wgpu::MapMode::Read, move |v| {
+            let _ = sender.send(v);
+        });
 
-        if let Ok(recv_result) =
-            block_on_wgpu(self.device(), receiver.receive()).inspect_err(|err| {
-                panic!("channel inaccessible: {:#}", err);
-            })
-        {
-            let _ = recv_result.unwrap();
+        let recv_result = match block_on_wgpu(self.device(), receiver.receive()) {
+            Ok(Some(result)) => result,
+            Ok(None) => {
+                eprintln!(
+                    "[wgpu_context][buffer_renderer] copy_texture_to_buffer:map_async_no_result"
+                );
+                return;
+            }
+            Err(err) => {
+                eprintln!(
+                    "[wgpu_context][buffer_renderer] copy_texture_to_buffer:block_on_wgpu_err {err}"
+                );
+                return;
+            }
+        };
+        if let Err(err) = recv_result {
+            eprintln!(
+                "[wgpu_context][buffer_renderer] copy_texture_to_buffer:map_async_err {err}"
+            );
+            return;
         }
 
         let data = buf_slice.get_mapped_range();

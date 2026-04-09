@@ -1,5 +1,6 @@
 use anyrender::ImageRenderer;
 use rustc_hash::FxHashMap;
+use std::sync::Arc;
 use vello::{Renderer as VelloRenderer, RendererOptions, Scene as VelloScene};
 use wgpu::TextureUsages;
 use wgpu_context::{BufferRenderer, BufferRendererConfig, WGPUContext};
@@ -10,6 +11,27 @@ pub struct VelloImageRenderer {
     buffer_renderer: BufferRenderer,
     vello_renderer: VelloRenderer,
     scene: VelloScene,
+}
+
+impl VelloImageRenderer {
+    pub fn probe_render_only(&mut self) {
+        let size = self.buffer_renderer.size();
+        self.vello_renderer
+            .render_to_texture(
+                self.buffer_renderer.device(),
+                self.buffer_renderer.queue(),
+                &self.scene,
+                &self.buffer_renderer.target_texture_view(),
+                &vello::RenderParams {
+                    base_color: vello::peniko::Color::TRANSPARENT,
+                    width: size.width,
+                    height: size.height,
+                    antialiasing_method: vello::AaConfig::Area,
+                },
+            )
+            .expect("Got non-Send/Sync error from rendering (probe_render_only)");
+        self.scene.reset();
+    }
 }
 
 impl ImageRenderer for VelloImageRenderer {
@@ -30,6 +52,9 @@ impl ImageRenderer for VelloImageRenderer {
                 usage: TextureUsages::STORAGE_BINDING,
             }))
             .expect("No compatible device found");
+        buffer_renderer.device().on_uncaptured_error(Arc::new(|err| {
+            eprintln!("[anyrender_vello] uncaptured wgpu error: {err}");
+        }));
 
         // Create vello::Renderer
         let vello_renderer = VelloRenderer::new(

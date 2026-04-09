@@ -46,6 +46,20 @@ impl Default for WGPUContext {
 }
 
 impl WGPUContext {
+    #[cfg(target_os = "windows")]
+    fn backend_options() -> wgpu::BackendOptions {
+        let mut backend_options = wgpu::BackendOptions::from_env_or_default();
+        if wgpu::Dx12Compiler::from_env().is_none() {
+            backend_options.dx12.shader_compiler = wgpu::Dx12Compiler::StaticDxc;
+        }
+        backend_options
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn backend_options() -> wgpu::BackendOptions {
+        wgpu::BackendOptions::from_env_or_default()
+    }
+
     pub fn new() -> Self {
         Self::with_features_and_limits(None, None)
     }
@@ -58,7 +72,7 @@ impl WGPUContext {
             instance: Instance::new(&wgpu::InstanceDescriptor {
                 backends: wgpu::Backends::from_env().unwrap_or_default(),
                 flags: wgpu::InstanceFlags::from_build_config().with_env(),
-                backend_options: wgpu::BackendOptions::from_env_or_default(),
+                backend_options: Self::backend_options(),
                 memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
             }),
             device_pool: Vec::new(),
